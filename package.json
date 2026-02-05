@@ -1,0 +1,15 @@
+{
+  "name": "h-tools",
+  "private": true,
+  "description": "Multi-package SDK collection",
+  "scripts": {
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "dev": "turbo run dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

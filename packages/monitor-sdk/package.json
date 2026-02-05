@@ -1,0 +1,37 @@
+{
+  "name": "@lanlan/monitor-sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.cjs.js",
+  "module": "dist/index.esm.js",
+  "unpkg": "dist/index.umd.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.esm.js",
+      "require": "./dist/index.cjs.js",
+      "default": "./dist/index.umd.js"
+    }
+  },
+  "scripts": {
+    "build": "rollup -c",
+    "lint": "oxlint",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "rrweb": "2.0.0-alpha.20",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "rollup": "^4.0.0",
+    "rollup-plugin-dts": "^6.0.0",
+    "@rollup/plugin-node-resolve": "^15.0.0",
+    "@rollup/plugin-commonjs": "^25.0.0",
+    "@rollup/plugin-typescript": "^11.0.0",
+    "typescript": "^5.1.0",
+    "vitest": "^1.0.0",
+    "@types/uuid": "^9.0.0",
+    "tslib": "^2.6.0"
+  }
+}
