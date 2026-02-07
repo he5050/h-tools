@@ -11,3 +11,6 @@ coverage
 .qoder
 .claude
 .worktrees
+.pnpm-store
+.turbo
+.trae
