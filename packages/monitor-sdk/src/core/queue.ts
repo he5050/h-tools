@@ -7,6 +7,23 @@ import { MonitorEvent } from "../shared/types"
 import { generateId } from "../shared/utils"
 
 /**
+ * 队列溢出策略
+ * @description 当队列达到上限时的处理策略
+ */
+export type OverflowStrategy = "replace" | "drop"
+
+/**
+ * 队列配置选项
+ * @description 配置事件队列的行为
+ */
+export interface QueueOptions {
+	/** 最大队列大小，默认 1000 */
+	maxSize?: number
+	/** 溢出策略：replace（移除最旧事件）或 drop（丢弃新事件），默认 replace */
+	overflowStrategy?: OverflowStrategy
+}
+
+/**
  * 事件队列类
  * @description 管理事件的入队、出队和与 Worker 的通信
  */
@@ -19,6 +36,8 @@ export class EventQueue {
 	private queue: MonitorEvent[] = []
 	/** 队列最大长度 */
 	private maxQueueSize: number
+	/** 溢出策略 */
+	private overflowStrategy: OverflowStrategy
 	/** 批量大小 */
 	private batchSize: number
 	/** 数据接收地址 */
@@ -36,11 +55,19 @@ export class EventQueue {
 	 * @param batchSize - 批量大小
 	 * @param flushInterval - 刷新间隔（毫秒）
 	 * @param appId - 应用 ID
+	 * @param options - 队列配置选项
 	 */
-	constructor(dsn: string, batchSize = 10, flushInterval = 5000, appId = "") {
+	constructor(
+		dsn: string,
+		batchSize = 10,
+		flushInterval = 5000,
+		appId = "",
+		options?: QueueOptions,
+	) {
 		this.dsn = dsn
 		this.batchSize = batchSize
-		this.maxQueueSize = 100
+		this.maxQueueSize = options?.maxSize ?? 1000
+		this.overflowStrategy = options?.overflowStrategy ?? "replace"
 		this.flushInterval = flushInterval
 		this.appId = appId
 		this.initWorker()
@@ -381,22 +408,59 @@ export class EventQueue {
 	 * @param event - 监控事件
 	 */
 	public push(event: MonitorEvent): void {
-		// 队列满时移除最旧的消息
-		if (this.queue.length >= this.maxQueueSize) {
-			this.queue.shift()
-		}
-
-		// Worker 不可用时加入内存队列
-		if (!this.worker) {
-			this.queue.push(event)
+		// Worker 可用时直接发送到 Worker
+		if (this.worker) {
+			this.worker.postMessage({
+				type: "event",
+				payload: event,
+			})
 			return
 		}
 
-		// 发送到 Worker
-		this.worker.postMessage({
-			type: "event",
-			payload: event,
-		})
+		// Worker 不可用时加入内存队列
+		// 队列满时根据溢出策略处理
+		if (this.queue.length >= this.maxQueueSize) {
+			if (this.overflowStrategy === "drop") {
+				// 丢弃新事件
+				return
+			}
+			// replace 策略：移除最旧的消息
+			this.queue.shift()
+		}
+
+		this.queue.push(event)
+	}
+
+	/**
+	 * 获取当前队列长度
+	 * @returns 队列中的事件数量
+	 */
+	public getLength(): number {
+		return this.queue.length
+	}
+
+	/**
+	 * 获取队列使用率
+	 * @returns 队列使用率（0-1）
+	 */
+	public getUsage(): number {
+		if (this.maxQueueSize === 0) return 0
+		return this.queue.length / this.maxQueueSize
+	}
+
+	/**
+	 * 获取队列最大容量
+	 * @returns 队列最大容量
+	 */
+	public getMaxSize(): number {
+		return this.maxQueueSize
+	}
+
+	/**
+	 * 清空队列
+	 */
+	public clear(): void {
+		this.queue = []
 	}
 
 	/**
@@ -430,5 +494,8 @@ export class EventQueue {
 			clearInterval(this.flushTimer)
 			this.flushTimer = null
 		}
+
+		// 清空内存队列
+		this.queue = []
 	}
 }

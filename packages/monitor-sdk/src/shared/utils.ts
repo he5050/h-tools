@@ -162,6 +162,20 @@ export function formatDate(date: Date | number, format = "YYYY-MM-DD HH:mm:ss"):
  * @returns 设备信息对象
  */
 export function getDeviceInfo(): DeviceInfo {
+	// SSR 环境检查
+	if (!isBrowser()) {
+		return {
+			browser: "SSR",
+			browserVersion: "N/A",
+			os: "Server",
+			osVersion: "N/A",
+			deviceType: "desktop",
+			screenWidth: 0,
+			screenHeight: 0,
+			devicePixelRatio: 1,
+		}
+	}
+
 	const ua = navigator.userAgent
 
 	// 检测浏览器（注意顺序：Edge 的 UA 包含 Chrome，需要先检测 Edge）
@@ -221,9 +235,9 @@ export function getDeviceInfo(): DeviceInfo {
 		os,
 		osVersion,
 		deviceType,
-		screenWidth: screen.width,
-		screenHeight: screen.height,
-		devicePixelRatio: window.devicePixelRatio || 1,
+		screenWidth: screen?.width ?? 0,
+		screenHeight: screen?.height ?? 0,
+		devicePixelRatio: window?.devicePixelRatio ?? 1,
 	}
 }
 
@@ -233,6 +247,11 @@ export function getDeviceInfo(): DeviceInfo {
  * @returns 是否支持
  */
 export function isFeatureSupported(feature: string): boolean {
+	// SSR 环境检查
+	if (!isBrowser()) {
+		return false
+	}
+
 	switch (feature) {
 		case "indexedDB":
 			return "indexedDB" in window
@@ -397,6 +416,11 @@ export function isBrowser(): boolean {
  * @returns 是否支持 localStorage
  */
 export function isLocalStorageSupported(): boolean {
+	// SSR 环境检查
+	if (!isBrowser()) {
+		return false
+	}
+
 	try {
 		const test = "__monitor_test__"
 		localStorage.setItem(test, test)
@@ -412,6 +436,11 @@ export function isLocalStorageSupported(): boolean {
  * @returns 是否支持 sessionStorage
  */
 export function isSessionStorageSupported(): boolean {
+	// SSR 环境检查
+	if (!isBrowser()) {
+		return false
+	}
+
 	try {
 		const test = "__monitor_test__"
 		sessionStorage.setItem(test, test)
@@ -498,7 +527,7 @@ export function safeRemoveLocalStorage(key: string): boolean {
  * @returns 是否 HTTPS
  */
 export function isHttps(): boolean {
-	return typeof window !== "undefined" && window.location.protocol === "https:"
+	return typeof window !== "undefined" && window?.location?.protocol === "https:"
 }
 
 /**
@@ -506,7 +535,7 @@ export function isHttps(): boolean {
  * @returns 是否支持 Service Worker
  */
 export function isServiceWorkerSupported(): boolean {
-	return "serviceWorker" in navigator
+	return isBrowser() && "serviceWorker" in navigator
 }
 
 /**
@@ -514,7 +543,7 @@ export function isServiceWorkerSupported(): boolean {
  * @returns 是否支持 Notification
  */
 export function isNotificationSupported(): boolean {
-	return "Notification" in window
+	return isBrowser() && "Notification" in window
 }
 
 /**
@@ -522,7 +551,7 @@ export function isNotificationSupported(): boolean {
  * @returns 是否支持 Geolocation
  */
 export function isGeolocationSupported(): boolean {
-	return "geolocation" in navigator
+	return isBrowser() && "geolocation" in navigator
 }
 
 /**
@@ -530,7 +559,7 @@ export function isGeolocationSupported(): boolean {
  * @returns 是否支持 WebSocket
  */
 export function isWebSocketSupported(): boolean {
-	return "WebSocket" in window
+	return isBrowser() && "WebSocket" in window
 }
 
 /**
@@ -538,6 +567,9 @@ export function isWebSocketSupported(): boolean {
  * @returns 是否支持 Canvas
  */
 export function isCanvasSupported(): boolean {
+	if (!isBrowser()) {
+		return false
+	}
 	return !!document.createElement("canvas").getContext
 }
 
@@ -546,6 +578,9 @@ export function isCanvasSupported(): boolean {
  * @returns 是否支持 WebGL
  */
 export function isWebGLSupported(): boolean {
+	if (!isBrowser()) {
+		return false
+	}
 	try {
 		const canvas = document.createElement("canvas")
 		return !!(window.WebGLRenderingContext && (canvas.getContext("webgl") || canvas.getContext("experimental-webgl")))
@@ -559,7 +594,7 @@ export function isWebGLSupported(): boolean {
  * @returns 是否支持 Touch
  */
 export function isTouchSupported(): boolean {
-	return "ontouchstart" in window || navigator.maxTouchPoints > 0
+	return isBrowser() && ("ontouchstart" in window || navigator.maxTouchPoints > 0)
 }
 
 /**
@@ -567,6 +602,9 @@ export function isTouchSupported(): boolean {
  * @returns 是否支持 Passive 事件
  */
 export function isPassiveEventSupported(): boolean {
+	if (!isBrowser()) {
+		return false
+	}
 	let supported = false
 	try {
 		const opts = Object.defineProperty({}, "passive", {
@@ -712,10 +750,7 @@ export function extractQueryParams(url: string): Record<string, string> | undefi
  * @param maxSize - 最大记录长度（字节），默认 2048
  * @returns 序列化后的字符串，无法序列化返回 undefined
  */
-export function serializeRequestBody(
-	body: unknown,
-	maxSize = 2048,
-): string | undefined {
+export function serializeRequestBody(body: unknown, maxSize = 2048): string | undefined {
 	if (body === null || body === undefined) return undefined
 
 	try {

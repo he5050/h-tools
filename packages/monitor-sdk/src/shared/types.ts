@@ -7,7 +7,7 @@
  * 网络过滤规则类型
  * @description 支持字符串（includes 匹配）、正则表达式、自定义函数三种匹配方式
  */
-export type NetworkFilterRule = string | RegExp | ((url: string) => boolean);
+export type NetworkFilterRule = string | RegExp | ((url: string) => boolean)
 
 /**
  * 网络监控配置接口
@@ -15,19 +15,19 @@ export type NetworkFilterRule = string | RegExp | ((url: string) => boolean);
  */
 export interface NetworkConfig {
 	/** 白名单规则：配置后仅记录匹配的请求 */
-	whitelist?: NetworkFilterRule[];
+	whitelist?: NetworkFilterRule[]
 	/** 黑名单规则：匹配的请求将被排除（优先级高于白名单） */
-	blacklist?: NetworkFilterRule[];
+	blacklist?: NetworkFilterRule[]
 	/** 是否记录请求体（POST/PUT 等） */
-	recordBody?: boolean;
+	recordBody?: boolean
 	/** 是否记录 URL 查询参数 */
-	recordQuery?: boolean;
+	recordQuery?: boolean
 	/** 是否记录请求头 */
-	recordHeaders?: boolean;
+	recordHeaders?: boolean
 	/** 请求体最大记录长度（字节），超出截断，默认 2048 */
-	maxBodySize?: number;
+	maxBodySize?: number
 	/** 需要排除的请求头字段（如 Authorization） */
-	excludeHeaders?: string[];
+	excludeHeaders?: string[]
 }
 
 /**
@@ -309,11 +309,14 @@ export interface ResourceLoadEvent extends BaseEvent {
 			/** 缓存命中率 (0-1) */
 			cacheHitRate: number
 			/** 按类型分类统计 */
-			byType: Record<string, {
-				count: number
-				totalSize: number
-				avgDuration: number
-			}>
+			byType: Record<
+				string,
+				{
+					count: number
+					totalSize: number
+					avgDuration: number
+				}
+			>
 			/** 慢资源列表（超过阈值） */
 			slowResources: Array<{
 				name: string
@@ -353,19 +356,21 @@ export interface SnapshotEvent extends BaseEvent {
  */
 export interface ReplayEvent extends BaseEvent {
 	type: EventType.REPLAY
-	data: {
-		records: Array<{
-			type: string
-			timestamp: number
-			data: Record<string, unknown>
-		}>
-		duration: number
-		recordCount: number
-	} | {
-		_compressed: boolean
-		_algorithm: string
-		data: number[]
-	}
+	data:
+		| {
+				records: Array<{
+					type: string
+					timestamp: number
+					data: Record<string, unknown>
+				}>
+				duration: number
+				recordCount: number
+		  }
+		| {
+				_compressed: boolean
+				_algorithm: string
+				data: number[]
+		  }
 }
 
 /**
@@ -475,6 +480,13 @@ export interface InitConfig {
 	beforeSend?: (event: MonitorEvent) => MonitorEvent | null
 	/** 数据脱敏回调 */
 	sanitize?: (data: Record<string, unknown>) => Record<string, unknown>
+	/** 队列配置选项 */
+	queueOptions?: {
+		/** 最大队列大小，默认 1000 */
+		maxSize?: number
+		/** 溢出策略：replace（移除最旧事件）或 drop（丢弃新事件），默认 replace */
+		overflowStrategy?: "replace" | "drop"
+	}
 }
 
 /**

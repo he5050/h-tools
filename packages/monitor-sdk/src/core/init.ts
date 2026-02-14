@@ -3,7 +3,7 @@
  * @description 提供 Monitor 类的实现，负责整合所有监控模块的初始化、配置管理和事件分发
  */
 
-import { InitConfig, MonitorEvent, EventType, MonitorErrorEvent, TrackEvent } from "../shared/types"
+import { InitConfig, MonitorEvent, EventType, MonitorErrorEvent, TrackEvent, QueueOptions } from "../shared/types"
 import { SessionManager } from "./session"
 import { EventQueue } from "./queue"
 import { ErrorMonitor } from "./hook/error"
@@ -19,6 +19,7 @@ import { SnapshotManager } from "./snapshot"
 import { ReplayManager } from "./replay"
 import { DEFAULT_CONFIG } from "../shared/constants"
 import { logger } from "../shared/logger"
+import { isBrowser } from "../shared/utils"
 
 /**
  * 事件管道包装器
@@ -128,7 +129,13 @@ export class Monitor {
 		// 初始化会话管理器
 		this.sessionManager = new SessionManager()
 		// 初始化事件队列
-		this.eventQueue = new EventQueue(this.config.dsn, this.config.batchSize, this.config.flushInterval, this.config.appId)
+		this.eventQueue = new EventQueue(
+			this.config.dsn,
+			this.config.batchSize,
+			this.config.flushInterval,
+			this.config.appId,
+			this.config.queueOptions,
+		)
 		// 初始化事件管道（所有模块通过管道推送事件，确保采样率/beforeSend/sanitize 生效）
 		this.eventPipeline = new EventPipeline(this.config, this.eventQueue)
 	}
@@ -138,6 +145,12 @@ export class Monitor {
 	 * @description 启动所有启用的监控模块，设置事件监听
 	 */
 	public init(): void {
+		// SSR 环境检查
+		if (!isBrowser()) {
+			logger.warn("Monitor SDK 只能在浏览器环境中运行，当前为 SSR 环境")
+			return
+		}
+
 		if (this.isInitialized) {
 			logger.warn("Monitor 已经初始化，请勿重复调用")
 			return
