@@ -3,7 +3,7 @@
  * @description Web Worker 的入口文件，负责处理主线程发来的消息
  */
 
-import type { WorkerMessage, WorkerResponse } from "../shared/types";
+import type { WorkerMessage, WorkerResponse, MonitorEvent, InitConfig } from "../shared/types";
 import { IndexedDBStorage } from "./storage/idb";
 import { BatchTransport } from "./transport/batch";
 import { SnapshotProcessor } from "./processor/snapshot";
@@ -12,7 +12,7 @@ import { ReplayProcessor } from "./processor/replay";
 /**
  * Worker 上下文类型声明
  */
-declare const self: DedicatedWorkerGlobalScope;
+declare const self: Worker;
 
 /**
  * 监控 Worker 类
@@ -52,39 +52,34 @@ class MonitorWorker {
 	 * 初始化 Worker
 	 * @param config - Worker 配置
 	 */
-	public async init(config: {
-		dsn: string;
-		batchSize: number;
-		flushInterval: number;
-		maxRetries: number;
-		appId: string;
-		enableCompression: boolean;
-	}): Promise<void> {
-		this.config = config;
+	public async init(config: InitConfig): Promise<void> {
+		this.config = {
+			dsn: config.dsn,
+			batchSize: config.batchSize ?? 10,
+			flushInterval: config.flushInterval ?? 5000,
+			maxRetries: config.maxRetries ?? 3,
+			appId: config.appId ?? "",
+			enableCompression: config.enableCompression ?? true,
+		};
 
-		// 初始化存储
 		await this.storage.init();
 
-		// 初始化传输
 		this.transport.init({
-			dsn: config.dsn,
-			batchSize: config.batchSize,
-			flushInterval: config.flushInterval,
-			maxRetries: config.maxRetries,
-			appId: config.appId,
-			enableCompression: config.enableCompression,
+			dsn: this.config.dsn,
+			batchSize: this.config.batchSize,
+			flushInterval: this.config.flushInterval,
+			maxRetries: this.config.maxRetries,
+			appId: this.config.appId,
+			enableCompression: this.config.enableCompression,
 			onBeforeSend: async (events) => {
-				// 发送前从存储中读取数据
-				return this.storage.getEvents(config.batchSize);
+				return this.storage.getEvents(this.config!.batchSize);
 			},
 			onSuccess: async (events) => {
-				// 上报成功后删除已发送的事件
 				const ids = events.map((e) => e.id).filter((id): id is number => id !== undefined);
 				await this.storage.deleteEvents(ids);
 			},
 		});
 
-		// 启动传输
 		this.transport.start();
 
 		this.sendResponse({ type: "init", success: true });
@@ -94,28 +89,26 @@ class MonitorWorker {
 	 * 处理事件
 	 * @param event - 事件数据
 	 */
-	public async handleEvent(event: WorkerMessage["payload"]): Promise<void> {
+	public async handleEvent(event: MonitorEvent): Promise<void> {
 		if (!this.config) {
 			this.sendResponse({ type: "error", error: "Worker not initialized" });
 			return;
 		}
 
 		try {
-			// 处理快照数据
+			let processedEvent: MonitorEvent = event;
+
 			if (event.type === "SNAPSHOT") {
-				event = this.snapshotProcessor.process(event);
+				processedEvent = this.snapshotProcessor.process(event as unknown as Record<string, unknown>) as unknown as MonitorEvent;
 			}
 
-			// 处理回放数据
 			if (event.type === "REPLAY") {
-				event = this.replayProcessor.process(event);
+				processedEvent = this.replayProcessor.process(event as unknown as Record<string, unknown>) as unknown as MonitorEvent;
 			}
 
-			// 存储到 IndexedDB
-			const id = await this.storage.addEvent(event);
+			const id = await this.storage.addEvent(processedEvent as unknown as Record<string, unknown>);
 
-			// 立即上报关键事件
-			if (this.isCriticalEvent(event)) {
+			if (this.isCriticalEvent(processedEvent)) {
 				await this.transport.flush();
 			}
 
@@ -162,7 +155,7 @@ class MonitorWorker {
 	 * @param event - 事件数据
 	 * @returns 是否为关键事件
 	 */
-	private isCriticalEvent(event: WorkerMessage["payload"]): boolean {
+	private isCriticalEvent(event: MonitorEvent): boolean {
 		const criticalTypes = ["ERROR", "PROMISE_REJECTION", "RESOURCE_ERROR", "BLANK_SCREEN"];
 		return criticalTypes.includes(event.type);
 	}
@@ -183,22 +176,16 @@ const worker = new MonitorWorker();
  * 监听主线程消息
  */
 self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
-	const { type, payload } = event.data;
+	const message = event.data;
+	const type = message.type;
 
 	switch (type) {
 		case "init":
-			await worker.init(payload as {
-				dsn: string;
-				batchSize: number;
-				flushInterval: number;
-				maxRetries: number;
-				appId: string;
-				enableCompression: boolean;
-			});
+			await worker.init((message as { type: "init"; payload: InitConfig }).payload);
 			break;
 
 		case "event":
-			await worker.handleEvent(payload as WorkerMessage["payload"]);
+			await worker.handleEvent((message as { type: "event"; payload: MonitorEvent }).payload);
 			break;
 
 		case "flush":
@@ -217,8 +204,3 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
 			worker["sendResponse"]({ type: "error", error: `Unknown message type: ${type}` });
 	}
 };
-
-// 监听页面卸载事件，使用 Beacon API 发送剩余数据
-self.addEventListener("beforeunload", () => {
-	worker.flush();
-});

@@ -24,23 +24,23 @@ export const REPLAY_STORE_NAME = "replays";
 
 /**
  * TTL (Time To Live) 配置
- * @description 不同类型数据的存活时间（毫秒）
+ * @description 不同类型数据的存活时间（毫秒），默认 30 天
  */
 export const TTL_CONFIG = {
-	/** 默认事件 TTL：7 天 */
-	DEFAULT_EVENT_TTL: 7 * 24 * 60 * 60 * 1000,
+	/** 默认事件 TTL：30 天 */
+	DEFAULT_EVENT_TTL: 30 * 24 * 60 * 60 * 1000,
 
 	/** 错误事件 TTL：30 天 */
 	ERROR_EVENT_TTL: 30 * 24 * 60 * 60 * 1000,
 
-	/** 快照数据 TTL：3 天 */
-	SNAPSHOT_TTL: 3 * 24 * 60 * 60 * 1000,
+	/** 快照数据 TTL：30 天 */
+	SNAPSHOT_TTL: 30 * 24 * 60 * 60 * 1000,
 
-	/** 回放数据 TTL：7 天 */
-	REPLAY_TTL: 7 * 24 * 60 * 60 * 1000,
+	/** 回放数据 TTL：30 天 */
+	REPLAY_TTL: 30 * 24 * 60 * 60 * 1000,
 
-	/** 性能数据 TTL：3 天 */
-	PERFORMANCE_TTL: 3 * 24 * 60 * 60 * 1000,
+	/** 性能数据 TTL：30 天 */
+	PERFORMANCE_TTL: 30 * 24 * 60 * 60 * 1000,
 };
 
 /**

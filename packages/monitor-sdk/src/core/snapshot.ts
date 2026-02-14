@@ -85,8 +85,17 @@ export class SnapshotManager {
 			return "";
 		}
 
+		// 跳过脚本标签，防止 XSS 风险
+		const tagName = element.tagName.toUpperCase();
+		if (tagName === "SCRIPT" || tagName === "NOSCRIPT") {
+			return "";
+		}
+
 		// 克隆元素以避免修改原始 DOM
 		const clone = element.cloneNode(false) as Element;
+
+		// 移除可能导致 XSS 的事件属性
+		this.removeEventAttributes(clone);
 
 		// 处理输入框值
 		if (this.config.includeInputValues && element instanceof HTMLInputElement) {
@@ -122,17 +131,57 @@ export class SnapshotManager {
 			cloneSelect.value = select.value;
 		}
 
-		// 递归处理子元素
+		// 递归处理子元素，使用 DOM API 而非 innerHTML 拼接
 		const children = element.children;
+		const childrenHtml: string[] = [];
 		for (let i = 0; i < children.length; i++) {
 			const child = children[i];
 			const serializedChild = this.serializeDOM(child, depth + 1);
 			if (serializedChild) {
-				clone.innerHTML += serializedChild;
+				childrenHtml.push(serializedChild);
+			}
+		}
+
+		// 如果有子元素，将其插入到克隆元素中
+		if (childrenHtml.length > 0) {
+			// 使用 DOMParser 安全地解析子元素 HTML
+			const parser = new DOMParser();
+			for (const childHtml of childrenHtml) {
+				try {
+					const doc = parser.parseFromString(childHtml, "text/html");
+					// 使用 firstElementChild 确保获取元素节点（而非文本节点）
+					const parsedChild = doc.body.firstElementChild;
+					if (parsedChild) {
+						clone.appendChild(parsedChild.cloneNode(true));
+					}
+				} catch {
+					// 解析失败则跳过该子元素
+				}
 			}
 		}
 
 		return clone.outerHTML;
+	}
+
+	/**
+	 * 移除元素上的事件属性，防止 XSS
+	 * @param element - DOM 元素
+	 */
+	private removeEventAttributes(element: Element): void {
+		const attributes = element.attributes;
+		const toRemove: string[] = [];
+
+		for (let i = 0; i < attributes.length; i++) {
+			const attrName = attributes[i].name.toLowerCase();
+			// 移除所有 on* 事件属性和 javascript: 协议
+			if (attrName.startsWith("on") || attributes[i].value.toLowerCase().includes("javascript:")) {
+				toRemove.push(attributes[i].name);
+			}
+		}
+
+		for (const attr of toRemove) {
+			element.removeAttribute(attr);
+		}
 	}
 
 	/**

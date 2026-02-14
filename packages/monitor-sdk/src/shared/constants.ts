@@ -68,6 +68,8 @@ export const DEFAULT_CONFIG = {
 	filterErrors: [] as RegExp[],
 	/** 是否启用数据压缩 */
 	enableCompression: false,
+	/** 数据过期时间（天），默认 30 天 */
+	dataExpireDays: 30,
 	/** 发送前回调 */
 	beforeSend: undefined as ((event: { type: string; timestamp: number; data: Record<string, unknown> }) => { type: string; timestamp: number; data: Record<string, unknown> } | null) | undefined,
 	/** 数据脱敏回调 */
@@ -117,16 +119,16 @@ export const DB_CONFIG = {
  * @description 不同类型数据的存活时间（毫秒）
  */
 export const TTL_CONFIG = {
-	/** 默认事件 TTL：7 天 */
-	DEFAULT_EVENT_TTL: 7 * 24 * 60 * 60 * 1000,
+	/** 默认事件 TTL：30 天 */
+	DEFAULT_EVENT_TTL: 30 * 24 * 60 * 60 * 1000,
 	/** 错误事件 TTL：30 天 */
 	ERROR_EVENT_TTL: 30 * 24 * 60 * 60 * 1000,
-	/** 快照数据 TTL：3 天 */
-	SNAPSHOT_TTL: 3 * 24 * 60 * 60 * 1000,
-	/** 回放数据 TTL：7 天 */
-	REPLAY_TTL: 7 * 24 * 60 * 60 * 1000,
-	/** 性能数据 TTL：3 天 */
-	PERFORMANCE_TTL: 3 * 24 * 60 * 60 * 1000,
+	/** 快照数据 TTL：30 天 */
+	SNAPSHOT_TTL: 30 * 24 * 60 * 60 * 1000,
+	/** 回放数据 TTL：30 天 */
+	REPLAY_TTL: 30 * 24 * 60 * 60 * 1000,
+	/** 性能数据 TTL：30 天 */
+	PERFORMANCE_TTL: 30 * 24 * 60 * 60 * 1000,
 };
 
 /**

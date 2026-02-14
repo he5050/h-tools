@@ -11,6 +11,7 @@ import {
 	extractQueryParams,
 	serializeRequestBody,
 	extractRequestHeaders,
+	urlCache,
 } from "../../shared/utils";
 
 /**
@@ -56,7 +57,7 @@ export class XHRInterceptor {
 		 */
 		function CustomXHR(this: XMLHttpRequest): XMLHttpRequest {
 			const xhr = new OriginalXHR();
-			const startTime = performance.now();
+			let startTime = 0;
 			let requestMethod = "GET";
 			let requestUrl = "";
 			/** 收集通过 setRequestHeader 设置的请求头 */
@@ -106,37 +107,49 @@ export class XHRInterceptor {
 			};
 
 			/**
-			 * 重写 send 方法
-			 * @param body - 请求体
-			 */
+		 * 重写 send 方法
+		 * @param body - 请求体
+		 */
 			xhr.send = function (body?: Document | XMLHttpRequestBodyInit | null): void {
-				// 不需要记录的请求直接放行
+				startTime = performance.now();
+
 				if (!shouldRecord) {
 					return originalSend.call(this, body);
 				}
 
-				// 预提取请求参数
-				let queryParams: Record<string, string> | undefined;
-				let requestBody: string | undefined;
-				let requestHeaders: Record<string, string> | undefined;
+				let lazyParams: {
+					queryParams?: Record<string, string>;
+					requestBody?: string;
+					requestHeaders?: Record<string, string>;
+				} | null = null;
 
-				if (networkConfig?.recordQuery !== false) {
-					queryParams = extractQueryParams(requestUrl);
-				}
-				if (networkConfig?.recordBody !== false) {
-					requestBody = serializeRequestBody(
-						body,
-						networkConfig?.maxBodySize ?? 2048,
-					);
-				}
-				if (networkConfig?.recordHeaders !== false && Object.keys(collectedHeaders).length > 0) {
-					requestHeaders = collectedHeaders;
-				}
+				const getParams = () => {
+					if (!lazyParams) {
+						lazyParams = {
+							queryParams: networkConfig?.recordQuery !== false 
+								? extractQueryParams(requestUrl) 
+								: undefined,
+							requestBody: networkConfig?.recordBody !== false 
+								? serializeRequestBody(body, networkConfig?.maxBodySize ?? 2048) 
+								: undefined,
+							requestHeaders: networkConfig?.recordHeaders !== false && Object.keys(collectedHeaders).length > 0
+								? { ...collectedHeaders }
+								: undefined,
+						};
+					}
+					return lazyParams;
+				};
 
-				// 监听请求完成
-				const onLoadEnd = (): void => {
+				let isReported = false;
+
+				const reportResult = (errorType?: string, errorMessage?: string): void => {
+					if (isReported) return;
+					isReported = true;
+
 					const endTime = performance.now();
 					const duration = Math.round(endTime - startTime);
+					const params = getParams();
+					const isSuccess = xhr.status >= 200 && xhr.status < 300 && !errorType;
 
 					const networkEvent: NetworkEvent = {
 						type: EventType.NETWORK,
@@ -148,22 +161,34 @@ export class XHRInterceptor {
 							statusText: xhr.statusText,
 							duration,
 							size: xhr.responseText?.length || 0,
-							success: xhr.status >= 200 && xhr.status < 300,
+							success: isSuccess,
 							type: "xhr",
-							queryParams,
-							requestBody,
-							requestHeaders,
+							queryParams: params.queryParams,
+							requestBody: params.requestBody,
+							requestHeaders: params.requestHeaders,
+							...(errorType && { error: errorMessage }),
 						},
 					};
 
 					eventQueue.push(networkEvent);
 					logger.debug("XHR 请求完成:", networkEvent);
 
-					// 移除监听器
 					xhr.removeEventListener("loadend", onLoadEnd);
+					xhr.removeEventListener("error", onError);
+					xhr.removeEventListener("timeout", onTimeout);
+					xhr.removeEventListener("abort", onAbort);
 				};
 
+				const onLoadEnd = (): void => reportResult();
+				const onError = (): void => reportResult("network", "网络请求失败");
+				const onTimeout = (): void => reportResult("timeout", `请求超时（超时时间: ${xhr.timeout}ms）`);
+				const onAbort = (): void => reportResult("abort", "请求被取消");
+
 				xhr.addEventListener("loadend", onLoadEnd);
+				xhr.addEventListener("error", onError);
+				xhr.addEventListener("timeout", onTimeout);
+				xhr.addEventListener("abort", onAbort);
+
 				return originalSend.call(this, body);
 			};
 

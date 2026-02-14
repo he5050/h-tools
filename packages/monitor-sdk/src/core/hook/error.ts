@@ -18,11 +18,13 @@ export class ErrorMonitor {
 	private filterErrors: RegExp[];
 	private isListening = false;
 
-	/**
-	 * 构造函数
-	 * @param eventQueue - 事件队列实例
-	 * @param filterErrors - 错误过滤正则表达式列表
-	 */
+	/** 错误聚合缓存 */
+	private errorCache = new Map<string, { count: number; firstOccurrence: number; lastOccurrence: number }>();
+	/** 聚合时间窗口（毫秒） */
+	private aggregationWindow = 60000;
+	/** 清理定时器 */
+	private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
 	constructor(
 		eventQueue: {
 			push: (event: MonitorErrorEvent | MonitorPromiseRejectionEvent | ResourceErrorEvent) => void;
@@ -41,33 +43,75 @@ export class ErrorMonitor {
 		if (this.isListening) return;
 		this.isListening = true;
 
-		// 监听 JavaScript 运行时错误
 		window.addEventListener("error", this.handleError as EventListener);
+		window.addEventListener("unhandledrejection", this.handlePromiseRejection as EventListener);
 
-		// 监听 Promise 拒绝错误
-		window.addEventListener(
-			"unhandledrejection",
-			this.handlePromiseRejection as EventListener,
-		);
+		this.cleanupTimer = setInterval(() => this.cleanupErrorCache(), this.aggregationWindow);
 
 		logger.info("错误监控已启动");
 	}
 
-	/**
-	 * 停止错误监听
-	 * @description 移除所有错误事件监听器
-	 */
 	public stop(): void {
 		if (!this.isListening) return;
 		this.isListening = false;
 
 		window.removeEventListener("error", this.handleError as EventListener);
-		window.removeEventListener(
-			"unhandledrejection",
-			this.handlePromiseRejection as EventListener,
-		);
+		window.removeEventListener("unhandledrejection", this.handlePromiseRejection as EventListener);
+
+		if (this.cleanupTimer) {
+			clearInterval(this.cleanupTimer);
+			this.cleanupTimer = null;
+		}
+
+		this.errorCache.clear();
 
 		logger.info("错误监控已停止");
+	}
+
+	/**
+	 * 生成错误指纹
+	 */
+	private generateErrorFingerprint(message: string, filename?: string, lineno?: number, colno?: number): string {
+		const normalizedMessage = message.substring(0, 100);
+		const normalizedFilename = filename ? filename.split("/").pop() || filename : "";
+		return `${normalizedMessage}:${normalizedFilename}:${lineno || 0}:${colno || 0}`;
+	}
+
+	/**
+	 * 检查是否应该聚合此错误
+	 */
+	private shouldAggregateError(fingerprint: string): { shouldAggregate: boolean; count: number } {
+		const now = Date.now();
+		const cached = this.errorCache.get(fingerprint);
+
+		if (cached) {
+			if (now - cached.firstOccurrence < this.aggregationWindow) {
+				cached.count++;
+				cached.lastOccurrence = now;
+				return { shouldAggregate: true, count: cached.count };
+			}
+			this.errorCache.delete(fingerprint);
+		}
+
+		this.errorCache.set(fingerprint, {
+			count: 1,
+			firstOccurrence: now,
+			lastOccurrence: now,
+		});
+
+		return { shouldAggregate: false, count: 1 };
+	}
+
+	/**
+	 * 清理过期的错误缓存
+	 */
+	private cleanupErrorCache(): void {
+		const now = Date.now();
+		for (const [fingerprint, data] of this.errorCache.entries()) {
+			if (now - data.lastOccurrence > this.aggregationWindow) {
+				this.errorCache.delete(fingerprint);
+			}
+		}
 	}
 
 	/**
@@ -75,20 +119,25 @@ export class ErrorMonitor {
 	 * @param event - 浏览器原生错误事件对象
 	 */
 	private handleError = (event: globalThis.ErrorEvent): void => {
-		// 检查是否应该过滤此错误
 		if (this.shouldFilterError(event.message, event.error?.stack)) {
 			return;
 		}
 
 		const target = event.target as HTMLElement;
 
-		// 判断是否为资源加载错误
 		if (target && (target.tagName === "IMG" || target.tagName === "SCRIPT" || target.tagName === "LINK" || target.tagName === "VIDEO" || target.tagName === "AUDIO" || target.tagName === "IFRAME")) {
 			this.handleResourceError(target);
 			return;
 		}
 
-		// 构建错误事件数据
+		const fingerprint = this.generateErrorFingerprint(event.message, event.filename, event.lineno, event.colno);
+		const { shouldAggregate, count } = this.shouldAggregateError(fingerprint);
+
+		if (shouldAggregate) {
+			logger.debug(`错误聚合中: ${fingerprint}, 次数: ${count}`);
+			return;
+		}
+
 		const errorEvent: MonitorErrorEvent = {
 			type: EventType.ERROR,
 			timestamp: Date.now(),
@@ -99,6 +148,7 @@ export class ErrorMonitor {
 				lineno: event.lineno,
 				colno: event.colno,
 				errorType: event.error?.name || "Error",
+				occurrenceCount: count,
 			},
 		};
 
@@ -115,7 +165,6 @@ export class ErrorMonitor {
 		let message: string;
 		let stack = "";
 
-		// 处理不同类型的拒绝原因
 		if (reason instanceof Error) {
 			message = reason.message;
 			stack = reason.stack || "";
@@ -125,8 +174,15 @@ export class ErrorMonitor {
 			message = JSON.stringify(reason);
 		}
 
-		// 检查是否应该过滤此错误
 		if (this.shouldFilterError(message, stack)) {
+			return;
+		}
+
+		const fingerprint = this.generateErrorFingerprint(message);
+		const { shouldAggregate, count } = this.shouldAggregateError(fingerprint);
+
+		if (shouldAggregate) {
+			logger.debug(`Promise 错误聚合中: ${fingerprint}, 次数: ${count}`);
 			return;
 		}
 
@@ -137,6 +193,7 @@ export class ErrorMonitor {
 				message,
 				stack,
 				errorType: "UnhandledPromiseRejection",
+				occurrenceCount: count,
 			},
 		};
 

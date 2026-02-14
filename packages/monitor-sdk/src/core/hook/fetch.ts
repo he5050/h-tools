@@ -11,6 +11,7 @@ import {
 	extractQueryParams,
 	serializeRequestBody,
 	extractRequestHeaders,
+	urlCache,
 } from "../../shared/utils";
 
 /**
@@ -63,40 +64,41 @@ export class FetchInterceptor {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 			const method = init?.method || "GET";
 
-			// 白名单/黑名单过滤：不符合条件的请求直接放行，不记录
 			if (!shouldRecordRequest(url, networkConfig)) {
 				return originalFetch(input, init);
 			}
 
 			const startTime = performance.now();
 
-			// 预提取请求参数（在请求发出前收集）
-			let queryParams: Record<string, string> | undefined;
-			let requestBody: string | undefined;
-			let requestHeaders: Record<string, string> | undefined;
+			let lazyParams: {
+				queryParams?: Record<string, string>;
+				requestBody?: string;
+				requestHeaders?: Record<string, string>;
+			} | null = null;
 
-			if (networkConfig?.recordQuery !== false) {
-				queryParams = extractQueryParams(url);
-			}
-			if (networkConfig?.recordBody !== false) {
-				requestBody = serializeRequestBody(
-					init?.body,
-					networkConfig?.maxBodySize ?? 2048,
-				);
-			}
-			if (networkConfig?.recordHeaders !== false) {
-				requestHeaders = extractRequestHeaders(
-					init?.headers,
-					networkConfig?.excludeHeaders,
-				);
-			}
+			const getParams = () => {
+				if (!lazyParams) {
+					lazyParams = {
+						queryParams: networkConfig?.recordQuery !== false 
+							? extractQueryParams(url) 
+							: undefined,
+						requestBody: networkConfig?.recordBody !== false 
+							? serializeRequestBody(init?.body, networkConfig?.maxBodySize ?? 2048) 
+							: undefined,
+						requestHeaders: networkConfig?.recordHeaders !== false 
+							? extractRequestHeaders(init?.headers, networkConfig?.excludeHeaders) 
+							: undefined,
+					};
+				}
+				return lazyParams;
+			};
 
 			try {
 				const response = await originalFetch(input, init);
 				const endTime = performance.now();
 				const duration = Math.round(endTime - startTime);
+				const params = getParams();
 
-				// 优先从 Content-Length header 获取大小，避免 clone+blob 导致大文件内存溢出
 				let size = 0;
 				const contentLength = response.headers.get("content-length");
 				if (contentLength) {
@@ -115,9 +117,9 @@ export class FetchInterceptor {
 						size,
 						success: response.ok,
 						type: "fetch",
-						queryParams,
-						requestBody,
-						requestHeaders,
+						queryParams: params.queryParams,
+						requestBody: params.requestBody,
+						requestHeaders: params.requestHeaders,
 					},
 				};
 
@@ -128,6 +130,7 @@ export class FetchInterceptor {
 			} catch (error) {
 				const endTime = performance.now();
 				const duration = Math.round(endTime - startTime);
+				const params = getParams();
 
 				const networkEvent: NetworkEvent = {
 					type: EventType.NETWORK,
@@ -142,9 +145,9 @@ export class FetchInterceptor {
 						success: false,
 						type: "fetch",
 						error: error instanceof Error ? error.message : "Unknown Error",
-						queryParams,
-						requestBody,
-						requestHeaders,
+						queryParams: params.queryParams,
+						requestBody: params.requestBody,
+						requestHeaders: params.requestHeaders,
 					},
 				};
 

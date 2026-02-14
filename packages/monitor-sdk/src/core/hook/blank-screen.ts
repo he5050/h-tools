@@ -26,6 +26,12 @@ export class BlankScreenDetector {
 	private isCurrentlyBlank = false
 	/** 当前检测的触发来源 */
 	private currentTrigger: "load" | "route_change" = "load"
+	/** 持续监控的防抖定时器 */
+	private debounceTimer: ReturnType<typeof setTimeout> | null = null
+	/** 已上报的白屏事件（防止重复上报） */
+	private reportedBlank = false
+	/** 路由切换检测定时器 */
+	private routeChangeTimer: ReturnType<typeof setTimeout> | null = null
 
 	/**
 	 * 构造函数
@@ -75,11 +81,20 @@ export class BlankScreenDetector {
 	public onRouteChange = (_from: string, _to: string): void => {
 		if (!this.isDetecting) return
 
+		// 清理可能存在的上一个路由检测定时器
+		if (this.routeChangeTimer) {
+			clearTimeout(this.routeChangeTimer)
+			this.routeChangeTimer = null
+		}
+
 		this.currentTrigger = "route_change"
 		this.checkCount = 0
+		// 重置上报标志，允许新路由的白屏检测上报
+		this.reportedBlank = false
 
 		// 路由切换后延迟检测（等待新页面渲染）
-		setTimeout(() => {
+		this.routeChangeTimer = setTimeout(() => {
+			this.routeChangeTimer = null
 			this.executeCheck()
 			this.scheduleNextCheck()
 		}, 200)
@@ -99,73 +114,94 @@ export class BlankScreenDetector {
 
 	/**
 	 * 执行白屏检测
-	 * @description 检查页面是否有可见内容
+	 * @description 检查页面是否有可见内容，使用空闲回调优化性能
 	 */
 	private executeCheck(): void {
 		this.checkCount++
 
-		// 计算可见内容比例
-		const coverage = this.calculateCoverage()
+		// 使用空闲回调执行计算密集型任务
+		const performCheck = () => {
+			// 计算可见内容比例
+			const coverage = this.calculateCoverage()
 
-		// 获取检测点数据
-		const points = this.getCheckPoints()
-		const blankPoints = points.filter((p) => p.isBlank)
+			// 获取检测点数据
+			const points = this.getCheckPoints()
+			const blankPoints = points.filter((p) => p.isBlank)
 
-		// 判断是否为白屏
-		const isBlankScreen = this.isBlankScreen(points, blankPoints, coverage)
+			// 判断是否为白屏
+			const isBlankScreen = this.isBlankScreen(points, blankPoints, coverage)
 
-		if (isBlankScreen) {
-			// 分析白屏原因
-			const reason = this.analyzeBlankReason()
+			if (isBlankScreen) {
+				// 标记白屏状态，用于恢复检测
+				if (!this.isCurrentlyBlank) {
+					this.isCurrentlyBlank = true
+					this.lastBlankTime = performance.now()
+				}
 
-			const blankEvent: BlankScreenEvent = {
-				type: EventType.BLANK_SCREEN,
-				timestamp: Date.now(),
-				data: {
-					url: location.href,
-					pathname: location.pathname,
-					checkPoints: points,
-					elements: this.getVisibleElements(),
-					coverage: coverage,
-					checkCount: this.checkCount,
-					timeSinceLoad: Math.round(performance.now() - this.pageLoadTime),
-					reason,
-					trigger: this.currentTrigger,
-				},
+				// 防止重复上报：在 maxChecks 周期内只上报一次
+				if (this.reportedBlank) {
+					return
+				}
+				this.reportedBlank = true
+
+				// 分析白屏原因（轻量级操作，同步执行）
+				const reason = this.analyzeBlankReason()
+
+				// 获取可见元素（限制数量，减少开销）
+				const elements = this.getVisibleElements()
+
+				const blankEvent: BlankScreenEvent = {
+					type: EventType.BLANK_SCREEN,
+					timestamp: Date.now(),
+					data: {
+						url: location.href,
+						pathname: location.pathname,
+						checkPoints: points,
+						elements: elements,
+						coverage: coverage,
+						checkCount: this.checkCount,
+						timeSinceLoad: Math.round(performance.now() - this.pageLoadTime),
+						reason,
+						trigger: this.currentTrigger,
+					},
+				}
+
+				this.eventQueue.push(blankEvent)
+				logger.warn("检测到白屏:", blankEvent)
+			} else if (this.isCurrentlyBlank) {
+				// 之前是白屏，现在恢复了 → 上报恢复事件
+				const recoveryTime = Math.round(performance.now() - this.lastBlankTime)
+				this.isCurrentlyBlank = false
+				// 重置上报标志，允许下一次白屏检测上报
+				this.reportedBlank = false
+
+				const recoveryEvent: BlankScreenEvent = {
+					type: EventType.BLANK_SCREEN,
+					timestamp: Date.now(),
+					data: {
+						url: location.href,
+						pathname: location.pathname,
+						checkPoints: points,
+						elements: this.getVisibleElements(),
+						coverage: coverage,
+						checkCount: this.checkCount,
+						timeSinceLoad: Math.round(performance.now() - this.pageLoadTime),
+						recovered: true,
+						recoveryTime,
+						trigger: this.currentTrigger,
+					},
+				}
+
+				this.eventQueue.push(recoveryEvent)
+				logger.info("白屏已恢复，恢复耗时:", recoveryTime, "ms")
 			}
+		}
 
-			this.eventQueue.push(blankEvent)
-			logger.warn("检测到白屏:", blankEvent)
-
-			// 标记白屏状态，用于恢复检测
-			if (!this.isCurrentlyBlank) {
-				this.isCurrentlyBlank = true
-				this.lastBlankTime = performance.now()
-			}
-		} else if (this.isCurrentlyBlank) {
-			// 之前是白屏，现在恢复了 → 上报恢复事件
-			const recoveryTime = Math.round(performance.now() - this.lastBlankTime)
-			this.isCurrentlyBlank = false
-
-			const recoveryEvent: BlankScreenEvent = {
-				type: EventType.BLANK_SCREEN,
-				timestamp: Date.now(),
-				data: {
-					url: location.href,
-					pathname: location.pathname,
-					checkPoints: points,
-					elements: this.getVisibleElements(),
-					coverage: coverage,
-					checkCount: this.checkCount,
-					timeSinceLoad: Math.round(performance.now() - this.pageLoadTime),
-					recovered: true,
-					recoveryTime,
-					trigger: this.currentTrigger,
-				},
-			}
-
-			this.eventQueue.push(recoveryEvent)
-			logger.info("白屏已恢复，恢复耗时:", recoveryTime, "ms")
+		// 优先使用 requestIdleCallback，降级使用 setTimeout
+		if (typeof requestIdleCallback !== "undefined") {
+			requestIdleCallback(performCheck, { timeout: 100 })
+		} else {
+			setTimeout(performCheck, 0)
 		}
 	}
 
@@ -232,13 +268,17 @@ export class BlankScreenDetector {
 	/**
 	 * 计算页面可见内容覆盖率
 	 * @returns 覆盖率 (0-1)
+	 * @description 使用20个采样点，平衡精度和性能
 	 */
 	private calculateCoverage(): number {
 		const viewportArea = window.innerWidth * window.innerHeight
 		if (viewportArea === 0) return 0
 
-		// 采样检测点
-		const samplePoints = this.getSamplePoints(50)
+		if (typeof document.elementFromPoint !== "function") {
+			return 0
+		}
+
+		const samplePoints = this.getSamplePoints(20)
 		let coveredPoints = 0
 
 		for (const point of samplePoints) {
@@ -282,24 +322,21 @@ export class BlankScreenDetector {
 		isBlank: boolean
 		element: string
 	}> {
-		// 基础检测点
 		const basePoints = [
-			{ xRatio: 0.5, yRatio: 0.5 }, // 中心
-			{ xRatio: 0.1, yRatio: 0.1 }, // 左上
-			{ xRatio: 0.9, yRatio: 0.1 }, // 右上
-			{ xRatio: 0.1, yRatio: 0.9 }, // 左下
-			{ xRatio: 0.9, yRatio: 0.9 }, // 右下
+			{ xRatio: 0.5, yRatio: 0.5 },
+			{ xRatio: 0.1, yRatio: 0.1 },
+			{ xRatio: 0.9, yRatio: 0.1 },
+			{ xRatio: 0.1, yRatio: 0.9 },
+			{ xRatio: 0.9, yRatio: 0.9 },
 		]
 
-		// 添加视口边缘检测点
 		const edgePoints = [
-			{ xRatio: 0.5, yRatio: 0.1 }, // 上边缘中点
-			{ xRatio: 0.5, yRatio: 0.9 }, // 下边缘中点
-			{ xRatio: 0.1, yRatio: 0.5 }, // 左边缘中点
-			{ xRatio: 0.9, yRatio: 0.5 }, // 右边缘中点
+			{ xRatio: 0.5, yRatio: 0.1 },
+			{ xRatio: 0.5, yRatio: 0.9 },
+			{ xRatio: 0.1, yRatio: 0.5 },
+			{ xRatio: 0.9, yRatio: 0.5 },
 		]
 
-		// 四分之一检测点
 		const quarterPoints = [
 			{ xRatio: 0.25, yRatio: 0.25 },
 			{ xRatio: 0.75, yRatio: 0.25 },
@@ -309,10 +346,12 @@ export class BlankScreenDetector {
 
 		const allPoints = [...basePoints, ...edgePoints, ...quarterPoints]
 
+		const hasElementFromPoint = typeof document.elementFromPoint === "function"
+
 		return allPoints.map((point) => {
 			const x = window.innerWidth * point.xRatio
 			const y = window.innerHeight * point.yRatio
-			const element = document.elementFromPoint(x, y)
+			const element = hasElementFromPoint ? document.elementFromPoint(x, y) : null
 
 			return {
 				x: Math.round(x),
@@ -382,14 +421,12 @@ export class BlankScreenDetector {
 		if (!window.MutationObserver) return
 
 		try {
-			let debounceTimer: ReturnType<typeof setTimeout> | null = null
-
 			this.observer = new MutationObserver(() => {
-				if (debounceTimer) {
-					clearTimeout(debounceTimer)
+				if (this.debounceTimer) {
+					clearTimeout(this.debounceTimer)
 				}
 
-				debounceTimer = setTimeout(() => {
+				this.debounceTimer = setTimeout(() => {
 					this.executeCheck()
 				}, 500)
 			})
@@ -416,6 +453,31 @@ export class BlankScreenDetector {
 		this.isDetecting = false
 		this.checkCount = 0
 		this.isCurrentlyBlank = false
+		this.reportedBlank = false
+
+		// 移除 DOMContentLoaded 监听器（如果尚未触发）
+		document.removeEventListener("DOMContentLoaded", this.handleDOMReady)
+
+		// 清理防抖定时器
+		if (this.debounceTimer) {
+			clearTimeout(this.debounceTimer)
+			this.debounceTimer = null
+		}
+
+		// 清理路由切换定时器
+		if (this.routeChangeTimer) {
+			clearTimeout(this.routeChangeTimer)
+			this.routeChangeTimer = null
+		}
+
+		// 清理样式缓存定时器
+		if (this.styleCacheTimer) {
+			clearTimeout(this.styleCacheTimer)
+			this.styleCacheTimer = null
+		}
+
+		// 清理样式缓存
+		this.elementStyleCache.clear()
 
 		// 停止 MutationObserver
 		if (this.observer) {
@@ -465,6 +527,11 @@ export class BlankScreenDetector {
 		return isBlank
 	}
 
+	/** 元素样式缓存，减少 getComputedStyle 调用 */
+	private elementStyleCache = new Map<Element, CSSStyleDeclaration>()
+	/** 缓存清理定时器 */
+	private styleCacheTimer: ReturnType<typeof setTimeout> | null = null
+
 	/**
 	 * 判断元素是否为空白元素
 	 * @param element - DOM 元素
@@ -481,30 +548,46 @@ export class BlankScreenDetector {
 			return true
 		}
 
-		try {
-			const style = window.getComputedStyle(element as HTMLElement)
+		// 从缓存获取样式，减少性能开销
+		let style: CSSStyleDeclaration | undefined = this.elementStyleCache.get(element)
+		if (!style) {
+			try {
+				style = window.getComputedStyle(element as HTMLElement)
+				this.elementStyleCache.set(element, style)
 
-			// 检查是否隐藏
-			if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+				// 延迟清理缓存，防止内存泄漏
+				if (this.styleCacheTimer) {
+					clearTimeout(this.styleCacheTimer)
+				}
+				this.styleCacheTimer = setTimeout(() => {
+					this.elementStyleCache.clear()
+					this.styleCacheTimer = null
+				}, 1000)
+			} catch {
 				return true
 			}
+		}
 
-			// 检查尺寸
-			const rect = element.getBoundingClientRect()
-			if (rect.width === 0 || rect.height === 0) {
-				return true
-			}
+		if (!style) return true
 
-			// 检查是否有实际内容（通过 innerText）
-			const text = element.textContent?.trim()
-			if (!text && element.children.length === 0) {
-				return true
-			}
-
-			return false
-		} catch {
+		// 检查是否隐藏
+		if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
 			return true
 		}
+
+		// 检查尺寸
+		const rect = element.getBoundingClientRect()
+		if (rect.width === 0 || rect.height === 0) {
+			return true
+		}
+
+		// 检查是否有实际内容（通过 innerText）
+		const text = element.textContent?.trim()
+		if (!text && element.children.length === 0) {
+			return true
+		}
+
+		return false
 	}
 
 	/**

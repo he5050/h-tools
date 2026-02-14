@@ -13,6 +13,8 @@ import { generateId } from "../shared/utils"
 export class EventQueue {
 	/** Worker 实例 */
 	private worker: Worker | null = null
+	/** Worker Blob URL（用于释放资源） */
+	private workerUrl: string | null = null
 	/** 内存队列（Worker 不可用时使用） */
 	private queue: MonitorEvent[] = []
 	/** 队列最大长度 */
@@ -53,8 +55,15 @@ export class EventQueue {
 			// 创建内联 Worker（通过 Blob URL）
 			const workerScript = this.createWorkerScript()
 			const blob = new Blob([workerScript], { type: "application/javascript" })
-			const workerUrl = URL.createObjectURL(blob)
-			this.worker = new Worker(workerUrl)
+			this.workerUrl = URL.createObjectURL(blob)
+			this.worker = new Worker(this.workerUrl)
+
+			// Worker 创建成功后立即释放 Blob URL，防止内存泄漏
+			// Worker 实例会继续持有脚本内容，释放 URL 不会影响其运行
+			if (this.workerUrl) {
+				URL.revokeObjectURL(this.workerUrl)
+				this.workerUrl = null
+			}
 
 			// 初始化 Worker
 			this.worker.postMessage({
@@ -80,7 +89,11 @@ export class EventQueue {
 				this.fallbackToImmediateSend()
 			}
 		} catch (error) {
-			// Worker 创建失败时降级到主线程处理
+			// Worker 创建失败时释放 URL 并降级到主线程处理
+			if (this.workerUrl) {
+				URL.revokeObjectURL(this.workerUrl)
+				this.workerUrl = null
+			}
 			console.warn("[Monitor SDK] Worker 不支持，降级到主线程")
 			this.fallbackToImmediateSend()
 		}

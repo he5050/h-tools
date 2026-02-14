@@ -164,19 +164,19 @@ export function formatDate(date: Date | number, format = "YYYY-MM-DD HH:mm:ss"):
 export function getDeviceInfo(): DeviceInfo {
 	const ua = navigator.userAgent
 
-	// 检测浏览器
+	// 检测浏览器（注意顺序：Edge 的 UA 包含 Chrome，需要先检测 Edge）
 	let browser = "Unknown"
 	let browserVersion = "Unknown"
 
-	if (BROWSER_REGEX.CHROME.test(ua)) {
+	if (BROWSER_REGEX.EDGE.test(ua)) {
+		browser = "Edge"
+		browserVersion = ua.match(BROWSER_REGEX.EDGE)?.[1] || "Unknown"
+	} else if (BROWSER_REGEX.CHROME.test(ua)) {
 		browser = "Chrome"
 		browserVersion = ua.match(BROWSER_REGEX.CHROME)?.[1] || "Unknown"
 	} else if (BROWSER_REGEX.FIREFOX.test(ua)) {
 		browser = "Firefox"
 		browserVersion = ua.match(BROWSER_REGEX.FIREFOX)?.[1] || "Unknown"
-	} else if (BROWSER_REGEX.EDGE.test(ua)) {
-		browser = "Edge"
-		browserVersion = ua.match(BROWSER_REGEX.EDGE)?.[1] || "Unknown"
 	} else if (BROWSER_REGEX.SAFARI.test(ua)) {
 		browser = "Safari"
 		browserVersion = ua.match(BROWSER_REGEX.SAFARI)?.[1] || "Unknown"
@@ -322,15 +322,20 @@ export function truncateString(str: string, maxLength: number, suffix = "..."): 
 /**
  * 解析 URL 参数
  * @param url - URL 字符串
- * @returns 参数对象
+ * @returns 参数对象，解析失败返回空对象
  */
 export function parseUrlParams(url: string): Record<string, string> {
 	const params: Record<string, string> = {}
-	const searchParams = new URL(url).searchParams
 
-	searchParams.forEach((value, key) => {
-		params[key] = value
-	})
+	try {
+		const searchParams = new URL(url, location?.origin || "http://localhost").searchParams
+
+		searchParams.forEach((value, key) => {
+			params[key] = value
+		})
+	} catch {
+		// URL 解析失败，返回空对象
+	}
 
 	return params
 }
@@ -339,16 +344,21 @@ export function parseUrlParams(url: string): Record<string, string> {
  * 构建 URL
  * @param base - 基础 URL
  * @param params - 参数对象
- * @returns 完整的 URL
+ * @returns 完整的 URL，解析失败返回原始 base
  */
 export function buildUrl(base: string, params: Record<string, string | number | boolean>): string {
-	const url = new URL(base)
+	try {
+		const url = new URL(base, location?.origin || "http://localhost")
 
-	Object.entries(params).forEach(([key, value]) => {
-		url.searchParams.set(key, String(value))
-	})
+		Object.entries(params).forEach(([key, value]) => {
+			url.searchParams.set(key, String(value))
+		})
 
-	return url.toString()
+		return url.toString()
+	} catch {
+		// URL 解析失败，返回原始 base
+		return base
+	}
 }
 
 /**
@@ -640,7 +650,9 @@ export function matchNetworkRule(url: string, rule: NetworkFilterRule): boolean 
  * 判断请求 URL 是否应该被记录（通过白名单/黑名单过滤）
  * @description 过滤逻辑：
  *   1. 未传 networkConfig → 记录所有请求
- *   2. 传了 networkConfig → 黑名单命中则排除；必须显式配置白名单且命中才记录
+ *   2. 黑名单命中 → 排除
+ *   3. 配置了白名单 → 必须命中白名单才记录
+ *   4. 未配置白名单 → 记录所有未被黑名单排除的请求
  * @param url - 请求 URL
  * @param config - 网络监控配置
  * @returns true 表示应该记录，false 表示应该跳过
@@ -658,17 +670,19 @@ export function shouldRecordRequest(url: string, config?: NetworkConfig): boolea
 		}
 	}
 
-	// 白名单：必须显式配置且命中才记录
+	// 白名单：如果配置了白名单，必须命中才记录
 	if (config.whitelist && config.whitelist.length > 0) {
 		for (const rule of config.whitelist) {
 			if (matchNetworkRule(url, rule)) {
 				return true
 			}
 		}
+		// 配置了白名单但未命中 → 不记录
+		return false
 	}
 
-	// 未配置白名单或白名单未命中 → 不记录
-	return false
+	// 未配置白名单，记录所有未被黑名单排除的请求
+	return true
 }
 
 /**
@@ -790,7 +804,6 @@ export function safeSerializeState(state: unknown): Record<string, unknown> | nu
 	if (state === null || state === undefined) return null
 
 	try {
-		// 验证可序列化性（structuredClone 兼容的对象）
 		const serialized = JSON.parse(JSON.stringify(state))
 		if (typeof serialized === "object" && serialized !== null) {
 			return serialized as Record<string, unknown>
@@ -800,3 +813,69 @@ export function safeSerializeState(state: unknown): Record<string, unknown> | nu
 		return null
 	}
 }
+
+/**
+ * URL 缓存类
+ * @description 缓存 URL 的解析结果，减少重复解析开销
+ */
+export class UrlCache {
+	private cache = new Map<string, { pathname: string; search: string; hash: string }>()
+	private maxSize: number
+
+	constructor(maxSize = 100) {
+		this.maxSize = maxSize
+	}
+
+	/**
+	 * 获取 URL 路径名（缓存）
+	 */
+	getPathname(url: string): string {
+		const parsed = this.parse(url)
+		return parsed.pathname
+	}
+
+	/**
+	 * 获取 URL 查询参数（缓存）
+	 */
+	getSearch(url: string): string {
+		const parsed = this.parse(url)
+		return parsed.search
+	}
+
+	/**
+	 * 解析 URL 并缓存结果
+	 */
+	private parse(url: string): { pathname: string; search: string; hash: string } {
+		const cached = this.cache.get(url)
+		if (cached) return cached
+
+		try {
+			const urlObj = new URL(url, location.origin)
+			const result = {
+				pathname: urlObj.pathname,
+				search: urlObj.search,
+				hash: urlObj.hash,
+			}
+
+			if (this.cache.size >= this.maxSize) {
+				const firstKey = this.cache.keys().next().value
+				if (firstKey) this.cache.delete(firstKey)
+			}
+
+			this.cache.set(url, result)
+			return result
+		} catch {
+			return { pathname: url, search: "", hash: "" }
+		}
+	}
+
+	/**
+	 * 清空缓存
+	 */
+	clear(): void {
+		this.cache.clear()
+	}
+}
+
+/** 全局 URL 缓存实例 */
+export const urlCache = new UrlCache()

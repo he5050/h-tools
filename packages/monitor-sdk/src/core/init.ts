@@ -114,6 +114,10 @@ export class Monitor {
 	/** 初始化状态标记 */
 	private isInitialized: boolean = false
 
+	/** 事件处理函数引用，用于移除监听器 */
+	private unloadHandler: (() => void) | null = null
+	private visibilityHandler: (() => void) | null = null
+
 	/**
 	 * 创建 Monitor 实例
 	 * @param config - SDK 初始化配置
@@ -230,9 +234,28 @@ export class Monitor {
 		this.blankScreenDetector?.stop()
 		this.resourceLoadMonitor?.stop()
 		this.replayManager?.stop()
+
+		// 移除页面卸载事件监听器
+		this.removeUnloadHandler()
+
 		this.eventPipeline.destroy()
 		this.isInitialized = false
 		logger.info("Monitor SDK 已销毁")
+	}
+
+	/**
+	 * 移除页面卸载事件监听器
+	 */
+	private removeUnloadHandler(): void {
+		if (this.unloadHandler) {
+			window.removeEventListener("beforeunload", this.unloadHandler)
+			window.removeEventListener("pagehide", this.unloadHandler)
+			this.unloadHandler = null
+		}
+		if (this.visibilityHandler) {
+			document.removeEventListener("visibilitychange", this.visibilityHandler)
+			this.visibilityHandler = null
+		}
 	}
 
 	/**
@@ -240,20 +263,22 @@ export class Monitor {
 	 * @description 在页面关闭或切换时触发数据刷新
 	 */
 	private setupUnloadHandler(): void {
-		const handleUnload = () => {
+		this.unloadHandler = () => {
 			this.eventPipeline.flush()
 		}
 
-		// 页面关闭前
-		window.addEventListener("beforeunload", handleUnload)
-		// 页面隐藏（移动端）
-		window.addEventListener("pagehide", handleUnload)
-		// 页面可见性变化
-		document.addEventListener("visibilitychange", () => {
+		this.visibilityHandler = () => {
 			if (document.visibilityState === "hidden") {
 				this.eventPipeline.flush()
 			}
-		})
+		}
+
+		// 页面关闭前
+		window.addEventListener("beforeunload", this.unloadHandler)
+		// 页面隐藏（移动端）
+		window.addEventListener("pagehide", this.unloadHandler)
+		// 页面可见性变化
+		document.addEventListener("visibilitychange", this.visibilityHandler)
 	}
 
 	/**

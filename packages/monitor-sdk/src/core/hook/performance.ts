@@ -34,6 +34,10 @@ export class PerformanceMonitor {
 	private navigationStart = 0
 	/** CLS 定时上报的定时器引用 */
 	private clsReportTimer: ReturnType<typeof setInterval> | null = null
+	/** CLS 首次上报的定时器引用 */
+	private clsFirstReportTimer: ReturnType<typeof setTimeout> | null = null
+	/** visibilitychange 事件处理函数引用 */
+	private visibilityChangeHandler: (() => void) | null = null
 
 	/**
 	 * 性能阈值配置
@@ -58,6 +62,7 @@ export class PerformanceMonitor {
 	constructor(eventQueue: { push: (event: PerformanceEvent) => void }) {
 		this.eventQueue = eventQueue
 		this.navigationStart = performance.timeOrigin || Date.now()
+		window.addEventListener("beforeunload", () => this.stop(), { once: true })
 	}
 
 	/**
@@ -368,6 +373,8 @@ export class PerformanceMonitor {
 
 			// 定期上报 CLS 值
 			const reportCLS = () => {
+				// 检查监控是否仍在运行
+				if (!this.isMonitoring) return
 				if (clsValue > 0) {
 					this.reportMetric("CLS", clsValue, {
 						entries: clsEntryCount,
@@ -377,7 +384,7 @@ export class PerformanceMonitor {
 			}
 
 			// 首次上报
-			setTimeout(reportCLS, 3000)
+			this.clsFirstReportTimer = setTimeout(reportCLS, 3000)
 			// 后续定期上报
 			this.clsReportTimer = setInterval(reportCLS, 5000)
 		} catch (e) {
@@ -505,14 +512,14 @@ export class PerformanceMonitor {
 	 * 处理页面可见性变化
 	 */
 	private handleVisibilityChange(): void {
-		const reportVisibleMetrics = () => {
+		this.visibilityChangeHandler = () => {
 			if (document.visibilityState === "visible") {
 				// 上报页面可见时的关键指标
 				this.reportVisibleMetrics()
 			}
 		}
 
-		document.addEventListener("visibilitychange", reportVisibleMetrics)
+		document.addEventListener("visibilitychange", this.visibilityChangeHandler)
 	}
 
 	/**
@@ -548,7 +555,7 @@ export class PerformanceMonitor {
 
 	/**
 	 * 停止性能监控
-	 * @description 断开所有 Performance Observer，清理定时器
+	 * @description 断开所有 Performance Observer，清理定时器和事件监听器
 	 */
 	public stop(): void {
 		this.observers.forEach((observer) => observer.disconnect())
@@ -558,6 +565,17 @@ export class PerformanceMonitor {
 		if (this.clsReportTimer) {
 			clearInterval(this.clsReportTimer)
 			this.clsReportTimer = null
+		}
+
+		if (this.clsFirstReportTimer) {
+			clearTimeout(this.clsFirstReportTimer)
+			this.clsFirstReportTimer = null
+		}
+
+		// 移除 visibilitychange 事件监听器
+		if (this.visibilityChangeHandler) {
+			document.removeEventListener("visibilitychange", this.visibilityChangeHandler)
+			this.visibilityChangeHandler = null
 		}
 
 		logger.info("性能监控已停止")

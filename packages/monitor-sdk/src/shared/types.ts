@@ -86,18 +86,14 @@ export interface BaseEvent {
 export interface MonitorErrorEvent extends BaseEvent {
 	type: EventType.ERROR
 	data: {
-		/** 错误消息 */
 		message: string
-		/** 错误堆栈 */
 		stack: string
-		/** 文件名 */
 		filename?: string
-		/** 行号 */
 		lineno?: number
-		/** 列号 */
 		colno?: number
-		/** 错误类型 */
 		errorType: string
+		/** 错误发生次数（聚合统计） */
+		occurrenceCount?: number
 	}
 }
 
@@ -108,12 +104,11 @@ export interface MonitorErrorEvent extends BaseEvent {
 export interface MonitorPromiseRejectionEvent extends BaseEvent {
 	type: EventType.PROMISE_REJECTION
 	data: {
-		/** 错误消息 */
 		message: string
-		/** 错误堆栈 */
 		stack: string
-		/** 错误类型 */
 		errorType: string
+		/** 错误发生次数（聚合统计） */
+		occurrenceCount?: number
 	}
 }
 
@@ -359,16 +354,17 @@ export interface SnapshotEvent extends BaseEvent {
 export interface ReplayEvent extends BaseEvent {
 	type: EventType.REPLAY
 	data: {
-		/** 回放记录 */
 		records: Array<{
 			type: string
 			timestamp: number
 			data: Record<string, unknown>
 		}>
-		/** 持续时间 */
 		duration: number
-		/** 记录数 */
 		recordCount: number
+	} | {
+		_compressed: boolean
+		_algorithm: string
+		data: number[]
 	}
 }
 
@@ -473,6 +469,8 @@ export interface InitConfig {
 	filterErrors?: RegExp[]
 	/** 是否启用数据压缩 */
 	enableCompression?: boolean
+	/** 数据过期时间（天），默认 30 天 */
+	dataExpireDays?: number
 	/** 发送前回调 */
 	beforeSend?: (event: MonitorEvent) => MonitorEvent | null
 	/** 数据脱敏回调 */
