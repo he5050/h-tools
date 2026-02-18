@@ -169,6 +169,7 @@ export class SnapshotManager {
 	 */
 	private removeEventAttributes(element: Element): void {
 		const attributes = element.attributes;
+		if (!attributes) return;
 		const toRemove: string[] = [];
 
 		for (let i = 0; i < attributes.length; i++) {

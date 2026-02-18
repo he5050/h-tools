@@ -252,15 +252,17 @@ export class ReplayManager {
 			}
 		});
 
-		observer.observe(document.body, {
-			childList: true,
-			subtree: true,
-			attributes: true,
-			attributeOldValue: true,
-			characterData: true,
-		});
-
 		this.observers.push(observer);
+
+		if (document.body) {
+			observer.observe(document.body, {
+				childList: true,
+				subtree: true,
+				attributes: true,
+				attributeOldValue: true,
+				characterData: true,
+			});
+		}
 	}
 
 	/**
